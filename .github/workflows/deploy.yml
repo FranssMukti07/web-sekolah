@@ -1,4 +1,4 @@
-name: Deploy to AWS EC2
+name: Deploy Laravel to AWS EC2
 
 on:
   push:
@@ -10,35 +10,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Upload files to server
-        uses: appleboy/scp-action@master
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.2
+          extensions: mbstring, intl, pdo, mysql, bcmath
+          ini-values: post_max_size=256M, upload_max_filesize=256M
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      # Jika project menggunakan Vite atau NPM (opsional)
+      - name: Install NPM dependencies
+        run: |
+          if [ -f package.json ]; then
+            npm install
+            npm run build
+          fi
+
+      - name: Prepare build (Remove unnecessary files)
+        run: |
+          rm -rf node_modules
+          rm -rf tests
+
+      - name: Upload project via SCP
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_IP }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          port: 22
+          port: ${{ secrets.SSH_PORT }}
           source: "./"
-          target: "/home/websekolah/app/"
+          target: "/home/websekolah/app"
 
-      - name: Deploy Docker container
-        uses: appleboy/ssh-action@master
+      - name: Run deploy commands in server (SSH)
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_IP }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          port: 22
+          port: ${{ secrets.SSH_PORT }}
           script: |
-            cd /home/websekolah/app/
-
-            #hapus yang lama
-            sudo docker stop web-sekolah || true
-            sudo docker rm web-sekolah || true
-            
-            # build image baru
-            sudo docker build -t websekolah-image .
-
-            # jalankan container baru
-            sudo docker run -d --name web-sekolah -p 80:80 websekolah-image
+            cd /home/websekolah/app
+            composer install --no-interaction --prefer-dist --optimize-autoloader
+            php artisan migrate --force
+            php artisan config:clear
+            php artisan cache:clear
+            php artisan route:clear
+            php artisan view:clear
+            php artisan config:cache
+            php artisan queue:restart
+            chmod -R 775 storage bootstrap/cache
